@@ -682,6 +682,7 @@ function ChannelResult({ data }: { data: any }) {
 
 /* VIDEO RESULT */
 
+
 function VideoResult({ data }: { data: any }) {
   const video = data.video;
 
