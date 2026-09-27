@@ -676,7 +676,7 @@ function ChannelResult({ data }: { data: any }) {
             </div>
           </div>
         </div>
-      </div>
+      
     );
 }
 
