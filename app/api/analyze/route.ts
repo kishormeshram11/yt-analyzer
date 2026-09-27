@@ -1,185 +1,217 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const API_BASE = "https://www.googleapis.com/youtube/v3";
-
-function videoId(url: string) {
-  try {
-    const u = new URL(url);
-    if (u.hostname.includes("youtu.be")) return u.pathname.slice(1);
-    if (u.searchParams.get("v")) return u.searchParams.get("v");
-    const m = u.pathname.match(/\/shorts\/([^/]+)/);
-    if (m) return m[1];
-    const e = u.pathname.match(/\/embed\/([^/]+)/);
-    if (e) return e[1];
-  } catch {}
-  return null;
-}
-
-function channelId(url: string) {
-  try {
-    const m = new URL(url).pathname.match(/\/channel\/([^/]+)/);
-    return m ? m[1] : null;
-  } catch {
-    return null;
-  }
-}
-
-function handle(url: string) {
-  try {
-    const m = new URL(url).pathname.match(/\/@([^/]+)/);
-    return m ? m[1] : null;
-  } catch {
-    return null;
-  }
-}
+const API = "https://www.googleapis.com/youtube/v3";
 
 async function yt(endpoint: string, params: Record<string, string>) {
   const key = process.env.YOUTUBE_API_KEY;
   if (!key) throw new Error("YouTube API key is not configured.");
 
   const q = new URLSearchParams({ ...params, key });
-  const r = await fetch(`${API_BASE}/${endpoint}?${q}`, {
-    cache: "no-store",
-  });
-  const data = await r.json();
+  const r = await fetch(`${API}/${endpoint}?${q}`, { cache: "no-store" });
+  const d = await r.json();
 
-  if (!r.ok) throw new Error(data?.error?.message || "YouTube API request failed.");
-  return data;
+  if (!r.ok) throw new Error(d?.error?.message || "YouTube API error");
+  return d;
 }
 
-export async function POST(request: NextRequest) {
+function getVideo(url: string) {
   try {
-    const body = await request.json();
-    const url = String(body?.url || "").trim();
+    const u = new URL(url);
+    if (u.hostname.includes("youtu.be")) return u.pathname.slice(1);
+    if (u.searchParams.get("v")) return u.searchParams.get("v");
+    return u.pathname.match(/\/(?:shorts|embed)\/([^/]+)/)?.[1] || null;
+  } catch {
+    return null;
+  }
+}
+
+function getChannel(url: string) {
+  try {
+    const p = new URL(url).pathname;
+    return {
+      id: p.match(/\/channel\/([^/]+)/)?.[1] || null,
+      handle: p.match(/\/@([^/]+)/)?.[1] || null,
+    };
+  } catch {
+    return { id: null, handle: null };
+  }
+}
+
+async function adSignal(id: string) {
+  try {
+    const r = await fetch(`https://www.youtube.com/watch?v=${id}`, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36",
+      },
+      cache: "no-store",
+    });
+
+    const html = await r.text();
+
+    const ad =
+      html.includes('"yt_ad"') ||
+      html.includes('"adPlacements"') ||
+      html.includes('"playerAds"');
+
+    return ad;
+  } catch {
+    return false;
+  }
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    const { url } = await req.json();
 
     if (!url)
-      return NextResponse.json({ error: "YouTube URL is required." }, { status: 400 });
+      return NextResponse.json(
+        { error: "YouTube URL is required." },
+        { status: 400 }
+      );
 
-    const vid = videoId(url);
+    const vid = getVideo(url);
 
+    // VIDEO CHECK
     if (vid) {
-      const data = await yt("videos", {
+      const d = await yt("videos", {
         part: "snippet,statistics,contentDetails",
         id: vid,
       });
 
-      if (!data.items?.length)
-        return NextResponse.json({ error: "Video not found." }, { status: 404 });
+      if (!d.items?.length)
+        return NextResponse.json(
+          { error: "Video not found." },
+          { status: 404 }
+        );
 
-      const x = data.items[0];
+      const v = d.items[0];
+      const ads = await adSignal(vid);
 
       return NextResponse.json({
         type: "video",
         data: {
           video: {
-            id: x.id,
-            title: x.snippet?.title || "",
-            description: x.snippet?.description || "",
+            id: v.id,
+            title: v.snippet?.title || "",
+            description: v.snippet?.description || "",
             thumbnail:
-              x.snippet?.thumbnails?.high?.url ||
-              x.snippet?.thumbnails?.medium?.url ||
-              x.snippet?.thumbnails?.default?.url || "",
-            publishedAt: x.snippet?.publishedAt || "",
-            views: x.statistics?.viewCount || "0",
-            likes: x.statistics?.likeCount || "0",
-            comments: x.statistics?.commentCount || "0",
-            channelId: x.snippet?.channelId || "",
-            channelTitle: x.snippet?.channelTitle || "",
+              v.snippet?.thumbnails?.high?.url ||
+              v.snippet?.thumbnails?.medium?.url ||
+              "",
+            publishedAt: v.snippet?.publishedAt || "",
+            views: v.statistics?.viewCount || "0",
+            likes: v.statistics?.likeCount || "0",
+            comments: v.statistics?.commentCount || "0",
+            channelId: v.snippet?.channelId || "",
+            channelTitle: v.snippet?.channelTitle || "",
+            monetization: ads ? "Monetized" : "Unknown",
+            monetizationReason: ads
+              ? "Advertising signal detected."
+              : "No public advertising signal detected.",
           },
         },
       });
     }
 
-    let cid = channelId(url);
-    const h = handle(url);
+    // CHANNEL CHECK
+    const cinfo = getChannel(url);
+    let cid = cinfo.id;
 
-    if (!cid && h) {
-      const d = await yt("channels", {
+    if (!cid && cinfo.handle) {
+      const h = await yt("channels", {
         part: "snippet,statistics,status",
-        forHandle: `@${h}`,
+        forHandle: `@${cinfo.handle}`,
       });
-      cid = d.items?.[0]?.id || null;
+      cid = h.items?.[0]?.id || null;
     }
 
     if (!cid)
       return NextResponse.json(
-        { error: "Please enter a valid YouTube channel URL (/channel/... or /@...). " },
+        { error: "Please enter a valid YouTube channel URL." },
         { status: 400 }
       );
 
-    const d = await yt("channels", {
+    const cd = await yt("channels", {
       part: "snippet,statistics,status",
       id: cid,
     });
 
-    if (!d.items?.length)
-      return NextResponse.json({ error: "Channel not found." }, { status: 404 });
+    if (!cd.items?.length)
+      return NextResponse.json(
+        { error: "Channel not found." },
+        { status: 404 }
+      );
 
-    const c = d.items[0];
+    const channel = cd.items[0];
 
-    const s = await yt("search", {
+    const search = await yt("search", {
       part: "snippet",
       channelId: cid,
-      maxResults: "12",
+      maxResults: "10",
       order: "date",
       type: "video",
     });
 
-    const ids = (s.items || [])
+    const ids = (search.items || [])
       .map((x: any) => x.id?.videoId)
-      .filter(Boolean)
-      .join(",");
+      .filter(Boolean);
 
-    let latestVideos: any[] = [];
+    const latestVideos: any[] = [];
+    let adCount = 0;
 
-    if (ids) {
-      const v = await yt("videos", {
-        part: "snippet,statistics",
-        id: ids,
-      });
+    for (const id of ids) {
+      const ads = await adSignal(id);
+      if (ads) adCount++;
 
-      latestVideos = (v.items || []).map((x: any) => ({
-        id: x.id,
-        title: x.snippet?.title || "",
-        description: x.snippet?.description || "",
+      const x = search.items.find((i: any) => i.id?.videoId === id);
+
+      latestVideos.push({
+        id,
+        title: x?.snippet?.title || "",
+        description: x?.snippet?.description || "",
         thumbnail:
-          x.snippet?.thumbnails?.high?.url ||
-          x.snippet?.thumbnails?.medium?.url ||
-          x.snippet?.thumbnails?.default?.url || "",
-        publishedAt: x.snippet?.publishedAt || "",
-        views: x.statistics?.viewCount || "0",
-        likes: x.statistics?.likeCount || "0",
-        comments: x.statistics?.commentCount || "0",
-      }));
+          x?.snippet?.thumbnails?.high?.url ||
+          x?.snippet?.thumbnails?.medium?.url ||
+          "",
+        publishedAt: x?.snippet?.publishedAt || "",
+        adSignal: ads,
+      });
     }
+
+    let monetization = "Unknown";
+
+    if (adCount >= 3) monetization = "Monetized";
+    else if (ids.length >= 5 && adCount === 0) monetization = "Not Monetized";
 
     return NextResponse.json({
       type: "channel",
       data: {
         channel: {
-          id: c.id,
-          title: c.snippet?.title || "",
-          description: c.snippet?.description || "",
+          id: channel.id,
+          title: channel.snippet?.title || "",
+          description: channel.snippet?.description || "",
           thumbnail:
-            c.snippet?.thumbnails?.high?.url ||
-            c.snippet?.thumbnails?.medium?.url ||
-            c.snippet?.thumbnails?.default?.url || "",
-          publishedAt: c.snippet?.publishedAt || "",
-          subscribers: c.statistics?.subscriberCount || "0",
-          views: c.statistics?.viewCount || "0",
-          videoCount: c.statistics?.videoCount || "0",
-          monetization: "Unknown",
+            channel.snippet?.thumbnails?.high?.url ||
+            channel.snippet?.thumbnails?.medium?.url ||
+            "",
+          publishedAt: channel.snippet?.publishedAt || "",
+          subscribers: channel.statistics?.subscriberCount || "0",
+          views: channel.statistics?.viewCount || "0",
+          videoCount: channel.statistics?.videoCount || "0",
+          monetization,
           monetizationReason:
-            "YouTube Data API public channel data does not provide exact monetization status.",
+            `${adCount} of ${ids.length} recent videos showed an advertising signal.`,
         },
         latestVideos,
       },
     });
-  } catch (error: any) {
-    console.error("YouTube analyzer error:", error);
+  } catch (e: any) {
+    console.error(e);
+
     return NextResponse.json(
-      { error: error?.message || "Something went wrong while analyzing the YouTube URL." },
+      { error: e?.message || "Something went wrong." },
       { status: 500 }
     );
   }
-        }
+          }
