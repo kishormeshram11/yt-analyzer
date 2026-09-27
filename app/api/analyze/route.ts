@@ -31,6 +31,7 @@ function getChannelId(url: string) {
     const u = new URL(url);
 
     const channelMatch = u.pathname.match(/\/channel\/([^/]+)/);
+
     if (channelMatch) {
       return channelMatch[1];
     }
@@ -46,6 +47,7 @@ function getHandle(url: string) {
     const u = new URL(url);
 
     const match = u.pathname.match(/\/@([^/]+)/);
+
     if (match) {
       return match[1];
     }
@@ -92,6 +94,7 @@ async function youtubeRequest(
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
+
     const url = String(body?.url || "").trim();
 
     if (!url) {
@@ -106,6 +109,7 @@ export async function POST(request: NextRequest) {
     // -----------------------------
     // VIDEO ANALYSIS
     // -----------------------------
+
     if (videoId) {
       const data = await youtubeRequest("videos", {
         part: "snippet,statistics,contentDetails",
@@ -147,10 +151,12 @@ export async function POST(request: NextRequest) {
     // -----------------------------
     // CHANNEL ANALYSIS
     // -----------------------------
+
     let channelId = getChannelId(url);
 
     // Handle URL such as:
     // https://www.youtube.com/@example
+
     if (!channelId) {
       const handle = getHandle(url);
 
@@ -189,6 +195,7 @@ export async function POST(request: NextRequest) {
     const channel = channelData.items[0];
 
     // Get latest public videos
+
     const searchData = await youtubeRequest("search", {
       part: "snippet",
       channelId,
@@ -259,4 +266,4 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
-}
+          }
