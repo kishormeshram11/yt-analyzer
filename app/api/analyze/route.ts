@@ -2,95 +2,48 @@ import { NextRequest, NextResponse } from "next/server";
 
 const API_BASE = "https://www.googleapis.com/youtube/v3";
 
-function getVideoId(url: string) {
+function videoId(url: string) {
   try {
     const u = new URL(url);
+    if (u.hostname.includes("youtu.be")) return u.pathname.slice(1);
+    if (u.searchParams.get("v")) return u.searchParams.get("v");
+    const m = u.pathname.match(/\/shorts\/([^/]+)/);
+    if (m) return m[1];
+    const e = u.pathname.match(/\/embed\/([^/]+)/);
+    if (e) return e[1];
+  } catch {}
+  return null;
+}
 
-    if (u.hostname.includes("youtu.be")) {
-      return u.pathname.slice(1);
-    }
-
-    const v = u.searchParams.get("v");
-    if (v) {
-      return v;
-    }
-
-    const shorts = u.pathname.match(/\/shorts\/([^/]+)/);
-    if (shorts) {
-      return shorts[1];
-    }
-
-    const embed = u.pathname.match(/\/embed\/([^/]+)/);
-    if (embed) {
-      return embed[1];
-    }
-
-    return null;
+function channelId(url: string) {
+  try {
+    const m = new URL(url).pathname.match(/\/channel\/([^/]+)/);
+    return m ? m[1] : null;
   } catch {
     return null;
   }
 }
 
-function getChannelId(url: string) {
+function handle(url: string) {
   try {
-    const u = new URL(url);
-    const match = u.pathname.match(/\/channel\/([^/]+)/);
-
-    if (match) {
-      return match[1];
-    }
-
-    return null;
+    const m = new URL(url).pathname.match(/\/@([^/]+)/);
+    return m ? m[1] : null;
   } catch {
     return null;
   }
 }
 
-function getHandle(url: string) {
-  try {
-    const u = new URL(url);
-    const match = u.pathname.match(/\/@([^/]+)/);
+async function yt(endpoint: string, params: Record<string, string>) {
+  const key = process.env.YOUTUBE_API_KEY;
+  if (!key) throw new Error("YouTube API key is not configured.");
 
-    if (match) {
-      return match[1];
-    }
-
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-async function youtubeRequest(
-  endpoint: string,
-  params: Record<string, string>
-) {
-  const apiKey = process.env.YOUTUBE_API_KEY;
-
-  if (!apiKey) {
-    throw new Error("YouTube API key is not configured.");
-  }
-
-  const searchParams = new URLSearchParams({
-    ...params,
-    key: apiKey,
+  const q = new URLSearchParams({ ...params, key });
+  const r = await fetch(`${API_BASE}/${endpoint}?${q}`, {
+    cache: "no-store",
   });
+  const data = await r.json();
 
-  const response = await fetch(
-    `${API_BASE}/${endpoint}?${searchParams.toString()}`,
-    {
-      cache: "no-store",
-    }
-  );
-
-  const data = await response.json();
-
-  if (!response.ok) {
-    throw new Error(
-      data?.error?.message || "YouTube API request failed."
-    );
-  }
-
+  if (!r.ok) throw new Error(data?.error?.message || "YouTube API request failed.");
   return data;
 }
 
@@ -99,196 +52,134 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const url = String(body?.url || "").trim();
 
-    if (!url) {
-      return NextResponse.json(
-        { error: "YouTube URL is required." },
-        { status: 400 }
-      );
-    }
+    if (!url)
+      return NextResponse.json({ error: "YouTube URL is required." }, { status: 400 });
 
-    /* =========================
-       VIDEO ANALYSIS
-       ========================= */
+    const vid = videoId(url);
 
-    const videoId = getVideoId(url);
-
-    if (videoId) {
-      const data = await youtubeRequest("videos", {
+    if (vid) {
+      const data = await yt("videos", {
         part: "snippet,statistics,contentDetails",
-        id: videoId,
+        id: vid,
       });
 
-      if (!data.items?.length) {
-        return NextResponse.json(
-          { error: "Video not found." },
-          { status: 404 }
-        );
-      }
+      if (!data.items?.length)
+        return NextResponse.json({ error: "Video not found." }, { status: 404 });
 
-      const item = data.items[0];
+      const x = data.items[0];
 
       return NextResponse.json({
         type: "video",
         data: {
           video: {
-            id: item.id,
-            title: item.snippet?.title || "",
-            description: item.snippet?.description || "",
+            id: x.id,
+            title: x.snippet?.title || "",
+            description: x.snippet?.description || "",
             thumbnail:
-              item.snippet?.thumbnails?.high?.url ||
-              item.snippet?.thumbnails?.medium?.url ||
-              item.snippet?.thumbnails?.default?.url ||
-              "",
-            publishedAt: item.snippet?.publishedAt || "",
-            views: item.statistics?.viewCount || "0",
-            likes: item.statistics?.likeCount || "0",
-            comments: item.statistics?.commentCount || "0",
-            channelId: item.snippet?.channelId || "",
-            channelTitle: item.snippet?.channelTitle || "",
+              x.snippet?.thumbnails?.high?.url ||
+              x.snippet?.thumbnails?.medium?.url ||
+              x.snippet?.thumbnails?.default?.url || "",
+            publishedAt: x.snippet?.publishedAt || "",
+            views: x.statistics?.viewCount || "0",
+            likes: x.statistics?.likeCount || "0",
+            comments: x.statistics?.commentCount || "0",
+            channelId: x.snippet?.channelId || "",
+            channelTitle: x.snippet?.channelTitle || "",
           },
         },
       });
     }
 
-    /* =========================
-       CHANNEL ID / HANDLE
-       ========================= */
+    let cid = channelId(url);
+    const h = handle(url);
 
-    let channelId = getChannelId(url);
-
-    if (!channelId) {
-      const handle = getHandle(url);
-
-      if (handle) {
-        const handleData = await youtubeRequest("channels", {
-          part: "snippet,statistics,status",
-          forHandle: handle,
-        });
-
-        channelId = handleData.items?.[0]?.id || null;
-      }
+    if (!cid && h) {
+      const d = await yt("channels", {
+        part: "snippet,statistics,status",
+        forHandle: `@${h}`,
+      });
+      cid = d.items?.[0]?.id || null;
     }
 
-    if (!channelId) {
+    if (!cid)
       return NextResponse.json(
-        {
-          error:
-            "Please enter a valid YouTube channel URL (/channel/...) or handle URL (/@...).",
-        },
+        { error: "Please enter a valid YouTube channel URL (/channel/... or /@...). " },
         { status: 400 }
       );
-    }
 
-    /* =========================
-       CHANNEL DATA
-       ========================= */
-
-    const channelData = await youtubeRequest("channels", {
+    const d = await yt("channels", {
       part: "snippet,statistics,status",
-      id: channelId,
+      id: cid,
     });
 
-    if (!channelData.items?.length) {
-      return NextResponse.json(
-        { error: "Channel not found." },
-        { status: 404 }
-      );
-    }
+    if (!d.items?.length)
+      return NextResponse.json({ error: "Channel not found." }, { status: 404 });
 
-    const channel = channelData.items[0];
+    const c = d.items[0];
 
-    /* =========================
-       MONETIZATION STATUS
-       ========================= */
-
-    const monetizationValue =
-      channel?.status?.isChannelMonetizationEnabled;
-
-    let monetization = "Unknown";
-
-    if (monetizationValue === true) {
-      monetization = "Monetized";
-    } else if (monetizationValue === false) {
-      monetization = "Not Monetized";
-    }
-
-    /* =========================
-       LATEST VIDEOS
-       ========================= */
-
-    const searchData = await youtubeRequest("search", {
+    const s = await yt("search", {
       part: "snippet",
-      channelId,
+      channelId: cid,
       maxResults: "12",
       order: "date",
       type: "video",
     });
 
-    const videoIds =
-      searchData.items
-        ?.map((item: any) => item.id?.videoId)
-        .filter(Boolean)
-        .join(",") || "";
+    const ids = (s.items || [])
+      .map((x: any) => x.id?.videoId)
+      .filter(Boolean)
+      .join(",");
 
     let latestVideos: any[] = [];
 
-    if (videoIds) {
-      const videosData = await youtubeRequest("videos", {
+    if (ids) {
+      const v = await yt("videos", {
         part: "snippet,statistics",
-        id: videoIds,
+        id: ids,
       });
 
-      latestVideos = (videosData.items || []).map((item: any) => ({
-        id: item.id,
-        title: item.snippet?.title || "",
-        description: item.snippet?.description || "",
+      latestVideos = (v.items || []).map((x: any) => ({
+        id: x.id,
+        title: x.snippet?.title || "",
+        description: x.snippet?.description || "",
         thumbnail:
-          item.snippet?.thumbnails?.high?.url ||
-          item.snippet?.thumbnails?.medium?.url ||
-          item.snippet?.thumbnails?.default?.url ||
-          "",
-        publishedAt: item.snippet?.publishedAt || "",
-        views: item.statistics?.viewCount || "0",
-        likes: item.statistics?.likeCount || "0",
-        comments: item.statistics?.commentCount || "0",
+          x.snippet?.thumbnails?.high?.url ||
+          x.snippet?.thumbnails?.medium?.url ||
+          x.snippet?.thumbnails?.default?.url || "",
+        publishedAt: x.snippet?.publishedAt || "",
+        views: x.statistics?.viewCount || "0",
+        likes: x.statistics?.likeCount || "0",
+        comments: x.statistics?.commentCount || "0",
       }));
     }
-
-    /* =========================
-       FINAL RESPONSE
-       ========================= */
 
     return NextResponse.json({
       type: "channel",
       data: {
         channel: {
-          id: channel.id,
-          title: channel.snippet?.title || "",
-          description: channel.snippet?.description || "",
+          id: c.id,
+          title: c.snippet?.title || "",
+          description: c.snippet?.description || "",
           thumbnail:
-            channel.snippet?.thumbnails?.high?.url ||
-            channel.snippet?.thumbnails?.medium?.url ||
-            channel.snippet?.thumbnails?.default?.url ||
-            "",
-          publishedAt: channel.snippet?.publishedAt || "",
-          subscribers: channel.statistics?.subscriberCount || "0",
-          views: channel.statistics?.viewCount || "0",
-          videoCount: channel.statistics?.videoCount || "0",
-          monetization,
+            c.snippet?.thumbnails?.high?.url ||
+            c.snippet?.thumbnails?.medium?.url ||
+            c.snippet?.thumbnails?.default?.url || "",
+          publishedAt: c.snippet?.publishedAt || "",
+          subscribers: c.statistics?.subscriberCount || "0",
+          views: c.statistics?.viewCount || "0",
+          videoCount: c.statistics?.videoCount || "0",
+          monetization: "Unknown",
+          monetizationReason:
+            "YouTube Data API public channel data does not provide exact monetization status.",
         },
         latestVideos,
       },
     });
   } catch (error: any) {
     console.error("YouTube analyzer error:", error);
-
     return NextResponse.json(
-      {
-        error:
-          error?.message ||
-          "Something went wrong while analyzing the YouTube URL.",
-      },
+      { error: error?.message || "Something went wrong while analyzing the YouTube URL." },
       { status: 500 }
     );
   }
-  }
+        }
