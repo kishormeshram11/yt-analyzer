@@ -29,11 +29,10 @@ function getVideoId(url: string) {
 function getChannelId(url: string) {
   try {
     const u = new URL(url);
+    const match = u.pathname.match(/\/channel\/([^/]+)/);
 
-    const channelMatch = u.pathname.match(/\/channel\/([^/]+)/);
-
-    if (channelMatch) {
-      return channelMatch[1];
+    if (match) {
+      return match[1];
     }
 
     return null;
@@ -45,7 +44,6 @@ function getChannelId(url: string) {
 function getHandle(url: string) {
   try {
     const u = new URL(url);
-
     const match = u.pathname.match(/\/@([^/]+)/);
 
     if (match) {
@@ -94,7 +92,6 @@ async function youtubeRequest(
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-
     const url = String(body?.url || "").trim();
 
     if (!url) {
@@ -104,11 +101,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // =========================
+    // VIDEO
+    // =========================
     const videoId = getVideoId(url);
-
-    // -----------------------------
-    // VIDEO ANALYSIS
-    // -----------------------------
 
     if (videoId) {
       const data = await youtubeRequest("videos", {
@@ -148,21 +144,17 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // -----------------------------
-    // CHANNEL ANALYSIS
-    // -----------------------------
-
+    // =========================
+    // CHANNEL
+    // =========================
     let channelId = getChannelId(url);
-
-    // Handle URL such as:
-    // https://www.youtube.com/@example
 
     if (!channelId) {
       const handle = getHandle(url);
 
       if (handle) {
         const handleData = await youtubeRequest("channels", {
-          part: "snippet,statistics",
+          part: "snippet,statistics,status",
           forHandle: handle,
         });
 
@@ -181,7 +173,7 @@ export async function POST(request: NextRequest) {
     }
 
     const channelData = await youtubeRequest("channels", {
-      part: "snippet,statistics",
+      part: "snippet,statistics,status",
       id: channelId,
     });
 
@@ -194,8 +186,17 @@ export async function POST(request: NextRequest) {
 
     const channel = channelData.items[0];
 
-    // Get latest public videos
+    // Monetization status
+    const monetization =
+      typeof channel.status?.isChannelMonetizationEnabled === "boolean"
+        ? channel.status.isChannelMonetizationEnabled
+          ? "Monetized"
+          : "Not Monetized"
+        : "Unknown";
 
+    // =========================
+    // LATEST VIDEOS
+    // =========================
     const searchData = await youtubeRequest("search", {
       part: "snippet",
       channelId,
@@ -236,21 +237,33 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       type: "channel",
+
       data: {
         channel: {
           id: channel.id,
           title: channel.snippet?.title || "",
           description: channel.snippet?.description || "",
+
           thumbnail:
             channel.snippet?.thumbnails?.high?.url ||
             channel.snippet?.thumbnails?.medium?.url ||
             channel.snippet?.thumbnails?.default?.url ||
             "",
+
           publishedAt: channel.snippet?.publishedAt || "",
-          subscribers: channel.statistics?.subscriberCount || "0",
-          views: channel.statistics?.viewCount || "0",
-          videoCount: channel.statistics?.videoCount || "0",
+
+          subscribers:
+            channel.statistics?.subscriberCount || "0",
+
+          views:
+            channel.statistics?.viewCount || "0",
+
+          videoCount:
+            channel.statistics?.videoCount || "0",
+
+          monetization,
         },
+
         latestVideos,
       },
     });
@@ -266,4 +279,4 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
-          }
+}
