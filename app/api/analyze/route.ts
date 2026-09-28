@@ -2,29 +2,30 @@ import { NextRequest, NextResponse } from "next/server";
 
 const API = "https://www.googleapis.com/youtube/v3";
 
-function videoId(url: string) {
+function getVideoId(url: string) {
   try {
     const u = new URL(url);
 
     if (u.hostname.includes("youtu.be")) {
-      return u.pathname.slice(1).split("/")[0];
+      return u.pathname.slice(1).split("/")[0] || null;
     }
 
-    if (u.searchParams.get("v")) {
-      return u.searchParams.get("v");
-    }
+    const v = u.searchParams.get("v");
+    if (v) return v;
 
     const shorts = u.pathname.match(/\/shorts\/([^/]+)/);
     if (shorts) return shorts[1];
 
     const embed = u.pathname.match(/\/embed\/([^/]+)/);
     if (embed) return embed[1];
-  } catch {}
 
-  return null;
+    return null;
+  } catch {
+    return null;
+  }
 }
 
-function channelId(url: string) {
+function getChannelId(url: string) {
   try {
     const u = new URL(url);
     const match = u.pathname.match(/\/channel\/([^/]+)/);
@@ -34,7 +35,7 @@ function channelId(url: string) {
   }
 }
 
-function handle(url: string) {
+function getHandle(url: string) {
   try {
     const u = new URL(url);
     const match = u.pathname.match(/\/@([^/]+)/);
@@ -44,7 +45,7 @@ function handle(url: string) {
   }
 }
 
-async function yt(
+async function youtube(
   endpoint: string,
   params: Record<string, string>
 ) {
@@ -54,13 +55,13 @@ async function yt(
     throw new Error("YouTube API key is not configured.");
   }
 
-  const q = new URLSearchParams({
+  const searchParams = new URLSearchParams({
     ...params,
     key,
   });
 
   const response = await fetch(
-    `${API}/${endpoint}?${q.toString()}`,
+    `${API}/${endpoint}?${searchParams.toString()}`,
     {
       cache: "no-store",
     }
@@ -70,8 +71,7 @@ async function yt(
 
   if (!response.ok) {
     throw new Error(
-      data?.error?.message ||
-        "YouTube API request failed."
+      data?.error?.message || "YouTube API request failed."
     );
   }
 
@@ -79,16 +79,19 @@ async function yt(
 }
 
 /*
-  Read publicly exposed player data from a YouTube watch page.
+  IMPORTANT
 
-  IMPORTANT:
-  This does NOT claim official YPP status.
-  It only looks for publicly exposed ad-break information.
+  This function only looks for publicly exposed ad-related
+  information on the YouTube watch page.
+
+  It does NOT determine official YouTube Partner Program
+  monetization status.
 */
-async function readAdSignal(id: string) {
+
+async function readPublicAdSignal(videoId: string) {
   try {
     const response = await fetch(
-      `https://www.youtube.com/watch?v=${encodeURIComponent(id)}`,
+      `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`,
       {
         cache: "no-store",
         headers: {
@@ -101,130 +104,164 @@ async function readAdSignal(id: string) {
 
     if (!response.ok) {
       return {
-        detected: false,
+        status: "unavailable" as const,
         adBreaks: 0,
-        error: `YouTube page returned ${response.status}`,
+        reason: `YouTube returned HTTP ${response.status}.`,
       };
     }
 
     const html = await response.text();
 
     /*
-      YouTube can expose player data in several places.
-      We search the page for ad-break related structures.
+      Look for player-response structures that can contain
+      public ad-related information.
+
+      We deliberately do not treat the absence of these
+      strings as proof that a video has no ads.
     */
 
     const adBreakMatches =
-      html.match(/adBreaks/g) || [];
+      html.match(/"adBreaks"\s*:/g) || [];
 
     const adPlacementMatches =
-      html.match(/adPlacements/g) || [];
+      html.match(/"adPlacements"\s*:/g) || [];
 
     const playerAdMatches =
-      html.match(/playerAds/g) || [];
+      html.match(/"playerAds"\s*:/g) || [];
 
-    const totalMatches =
+    const adBreakCount =
       adBreakMatches.length +
       adPlacementMatches.length +
       playerAdMatches.length;
 
-    /*
-      Try to estimate the number of actual ad-break
-      objects without treating it as official status.
-    */
-
-    const timeRanges =
-      html.match(/startTimeMs/g) || [];
-
-    const detected = totalMatches > 0;
+    if (adBreakCount > 0) {
+      return {
+        status: "detected" as const,
+        adBreaks: adBreakCount,
+        reason: "Public ad-related signal detected.",
+      };
+    }
 
     return {
-      detected,
-      adBreaks: Math.max(
-        timeRanges.length,
-        adBreakMatches.length
-      ),
-      rawSignalCount: totalMatches,
+      status: "unavailable" as const,
+      adBreaks: 0,
+      reason:
+        "No usable public ad-related signal was exposed by YouTube.",
     };
   } catch (error: any) {
     return {
-      detected: false,
+      status: "unavailable" as const,
       adBreaks: 0,
-      error:
+      reason:
         error?.message ||
-        "Unable to read public YouTube page.",
+        "Unable to read the public YouTube page.",
     };
   }
 }
 
-async function getVideo(id: string) {
-  const data = await yt("videos", {
+async function getVideo(videoId: string) {
+  const data = await youtube("videos", {
     part: "snippet,statistics,contentDetails",
-    id,
+    id: videoId,
   });
 
   if (!data.items?.length) {
     throw new Error("Video not found.");
   }
 
-  const v = data.items[0];
+  const item = data.items[0];
 
-  const signal = await readAdSignal(id);
+  const adSignal = await readPublicAdSignal(videoId);
 
   return {
-    id: v.id,
-    title: v.snippet?.title || "",
-    description: v.snippet?.description || "",
+    id: item.id,
+    title: item.snippet?.title || "",
+    description: item.snippet?.description || "",
     thumbnail:
-      v.snippet?.thumbnails?.high?.url ||
-      v.snippet?.thumbnails?.medium?.url ||
-      v.snippet?.thumbnails?.default?.url ||
+      item.snippet?.thumbnails?.high?.url ||
+      item.snippet?.thumbnails?.medium?.url ||
+      item.snippet?.thumbnails?.default?.url ||
       "",
-    publishedAt:
-      v.snippet?.publishedAt || "",
-    views:
-      v.statistics?.viewCount || "0",
-    likes:
-      v.statistics?.likeCount || "0",
-    comments:
-      v.statistics?.commentCount || "0",
-    channelId:
-      v.snippet?.channelId || "",
-    channelTitle:
-      v.snippet?.channelTitle || "",
-
-    adSignal: signal,
+    publishedAt: item.snippet?.publishedAt || "",
+    views: item.statistics?.viewCount || "0",
+    likes: item.statistics?.likeCount || "0",
+    comments: item.statistics?.commentCount || "0",
+    channelId: item.snippet?.channelId || "",
+    channelTitle: item.snippet?.channelTitle || "",
+    adSignal,
   };
+}
+
+async function getChannelByHandle(handle: string) {
+  const data = await youtube("channels", {
+    part: "snippet,statistics,contentDetails",
+    forHandle: handle,
+  });
+
+  return data.items?.[0] || null;
+}
+
+async function getLatestVideos(channelId: string) {
+  const search = await youtube("search", {
+    part: "snippet",
+    channelId,
+    maxResults: "8",
+    order: "date",
+    type: "video",
+  });
+
+  const ids =
+    search.items
+      ?.map((item: any) => item.id?.videoId)
+      .filter(Boolean) || [];
+
+  const videos = [];
+
+  /*
+    Keep these sequential to reduce the chance of sending
+    too many simultaneous requests.
+  */
+  for (const id of ids) {
+    try {
+      const video = await getVideo(id);
+      videos.push(video);
+    } catch (error) {
+      console.error(
+        `Unable to analyze video ${id}:`,
+        error
+      );
+    }
+  }
+
+  return videos;
 }
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
 
-    const url = String(
-      body?.url || ""
-    ).trim();
+    const url = String(body?.url || "").trim();
 
     if (!url) {
       return NextResponse.json(
         {
           error:
-            "YouTube URL is required.",
+            "Please enter a YouTube video or channel URL.",
         },
         { status: 400 }
       );
     }
 
     /*
-      ------------------------------------------------
+      -------------------------
       VIDEO
-      ------------------------------------------------
+      -------------------------
     */
 
-    const vid = videoId(url);
+    const videoId = getVideoId(url);
 
-    if (vid) {
-      const video = await getVideo(vid);
+    if (videoId) {
+      const video = await getVideo(videoId);
 
       return NextResponse.json({
         type: "video",
@@ -232,126 +269,69 @@ export async function POST(req: NextRequest) {
         data: {
           video,
 
-          /*
-            Descriptive signal only.
-          */
-          monetizationSignal:
-            video.adSignal.detected
-              ? "Ad signal detected"
-              : "No ad signal detected",
-
-          evidence: {
-            adBreaks:
-              video.adSignal.adBreaks,
-            rawSignalCount:
-              video.adSignal.rawSignalCount || 0,
+          publicAdSignal: {
+            status: video.adSignal.status,
+            adBreaks: video.adSignal.adBreaks,
+            reason: video.adSignal.reason,
           },
         },
       });
     }
 
     /*
-      ------------------------------------------------
+      -------------------------
       CHANNEL
-      ------------------------------------------------
+      -------------------------
     */
 
-    let id = channelId(url);
+    let channelId = getChannelId(url);
 
-    if (!id) {
-      const h = handle(url);
+    if (!channelId) {
+      const handle = getHandle(url);
 
-      if (h) {
-        const data = await yt(
-          "channels",
-          {
-            part:
-              "snippet,statistics,contentDetails",
-            forHandle: h,
-          }
-        );
-
-        id =
-          data.items?.[0]?.id ||
-          null;
+      if (handle) {
+        const channel = await getChannelByHandle(handle);
+        channelId = channel?.id || null;
       }
     }
 
-    if (!id) {
+    if (!channelId) {
       return NextResponse.json(
         {
           error:
-            "Please enter a valid YouTube channel URL."
+            "Please enter a valid YouTube channel URL.",
         },
         { status: 400 }
       );
     }
 
-    const channelData = await yt(
-      "channels",
-      {
-        part:
-          "snippet,statistics,contentDetails",
-        id,
-      }
-    );
+    const channelData = await youtube("channels", {
+      part: "snippet,statistics,contentDetails",
+      id: channelId,
+    });
 
     if (!channelData.items?.length) {
       return NextResponse.json(
         {
-          error: "Channel not found."
+          error: "Channel not found.",
         },
         { status: 404 }
       );
     }
 
-    const channel =
-      channelData.items[0];
+    const channel = channelData.items[0];
 
-    /*
-      Get recent uploads.
-    */
+    const latestVideos = await getLatestVideos(channelId);
 
-    const search = await yt(
-      "search",
-      {
-        part: "snippet",
-        channelId: id,
-        maxResults: "8",
-        order: "date",
-        type: "video",
-      }
+    const detectedVideos = latestVideos.filter(
+      (video: any) =>
+        video.adSignal?.status === "detected"
     );
 
-    const ids =
-      search.items
-        ?.map(
-          (item: any) =>
-            item.id?.videoId
-        )
-        .filter(Boolean) || [];
-
-    /*
-      Fetch videos one-by-one so each video page
-      can be inspected for its public ad signal.
-    */
-
-    const latestVideos = [];
-
-    for (const id of ids) {
-      const video = await getVideo(id);
-      latestVideos.push(video);
-    }
-
-    const videosWithSignals =
-      latestVideos.filter(
-        (video: any) =>
-          video.adSignal?.detected
-      ).length;
-
-    const videosWithoutSignals =
-      latestVideos.length -
-      videosWithSignals;
+    const unavailableVideos = latestVideos.filter(
+      (video: any) =>
+        video.adSignal?.status === "unavailable"
+    );
 
     return NextResponse.json({
       type: "channel",
@@ -367,73 +347,53 @@ export async function POST(req: NextRequest) {
             channel.snippet?.description || "",
 
           thumbnail:
-            channel.snippet?.thumbnails
-              ?.high?.url ||
-            channel.snippet?.thumbnails
-              ?.medium?.url ||
-            channel.snippet?.thumbnails
-              ?.default?.url ||
+            channel.snippet?.thumbnails?.high?.url ||
+            channel.snippet?.thumbnails?.medium?.url ||
+            channel.snippet?.thumbnails?.default?.url ||
             "",
 
           publishedAt:
-            channel.snippet?.publishedAt ||
-            "",
+            channel.snippet?.publishedAt || "",
 
           subscribers:
-            channel.statistics
-              ?.subscriberCount || "0",
+            channel.statistics?.subscriberCount || "0",
 
           views:
-            channel.statistics
-              ?.viewCount || "0",
+            channel.statistics?.viewCount || "0",
 
           videoCount:
-            channel.statistics
-              ?.videoCount || "0",
+            channel.statistics?.videoCount || "0",
         },
 
         latestVideos,
 
-        /*
-          Descriptive public evidence.
-        */
-
         publicAdEvidence: {
-          videosChecked:
-            latestVideos.length,
+          videosChecked: latestVideos.length,
 
           videosWithAdSignals:
-            videosWithSignals,
+            detectedVideos.length,
 
-          videosWithoutAdSignals:
-            videosWithoutSignals,
+          videosUnavailable:
+            unavailableVideos.length,
 
           signalDetected:
-            videosWithSignals > 0,
+            detectedVideos.length > 0,
+
+          status:
+            detectedVideos.length > 0
+              ? "detected"
+              : "unavailable",
         },
-
-        /*
-          IMPORTANT:
-          This is evidence, not official YPP status.
-        */
-
-        monetizationSignal:
-          videosWithSignals > 0
-            ? "Monetization signals detected"
-            : "No monetization signals detected",
       },
     });
   } catch (error: any) {
-    console.error(
-      "Analyzer error:",
-      error
-    );
+    console.error("Analyzer error:", error);
 
     return NextResponse.json(
       {
         error:
           error?.message ||
-          "Something went wrong."
+          "Something went wrong while analyzing the URL.",
       },
       { status: 500 }
     );
