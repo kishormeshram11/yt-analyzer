@@ -1,283 +1,609 @@
 "use client";
 
-import { useState } from "react";
+import { FormEvent, useState } from "react";
+
+type AdSignal = {
+  detected?: boolean;
+  adBreaks?: number;
+  rawSignalCount?: number;
+  error?: string;
+};
+
+type Video = {
+  id: string;
+  title: string;
+  description?: string;
+  thumbnail: string;
+  publishedAt?: string;
+  views?: string;
+  likes?: string;
+  comments?: string;
+  channelId?: string;
+  channelTitle?: string;
+  adSignal?: AdSignal;
+};
+
+type Channel = {
+  id: string;
+  title: string;
+  description?: string;
+  thumbnail: string;
+  publishedAt?: string;
+  subscribers?: string;
+  views?: string;
+  videoCount?: string;
+};
+
+type Result = {
+  type: "video" | "channel";
+  data: {
+    video?: Video;
+    channel?: Channel;
+    latestVideos?: Video[];
+    monetizationSignal?: string;
+    publicAdEvidence?: {
+      videosChecked: number;
+      videosWithAdSignals: number;
+      videosWithoutAdSignals: number;
+      signalDetected: boolean;
+    };
+  };
+};
+
+function formatNumber(value?: string) {
+  const n = Number(value || 0);
+
+  if (!Number.isFinite(n)) return value || "0";
+  if (n >= 10000000) return `${(n / 10000000).toFixed(1)}Cr`;
+  if (n >= 100000) return `${(n / 100000).toFixed(1)}L`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`;
+
+  return n.toLocaleString();
+}
+
+function formatDate(value?: string) {
+  if (!value) return "";
+
+  try {
+    return new Date(value).toLocaleDateString("en-IN", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    });
+  } catch {
+    return "";
+  }
+}
+
+function signalLabel(video: Video) {
+  if (video.adSignal?.detected) {
+    return "Ad signal detected";
+  }
+
+  return "No ad signal detected";
+}
 
 export default function Home() {
   const [url, setUrl] = useState("");
-  const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<Result | null>(null);
   const [error, setError] = useState("");
-  const [menu, setMenu] = useState(false);
 
-  async function analyze() {
-    if (!url.trim()) return setError("Please enter a YouTube URL.");
+  async function analyze(e: FormEvent) {
+    e.preventDefault();
+
+    if (!url.trim()) {
+      setError("Please enter a YouTube video or channel URL.");
+      return;
+    }
 
     setLoading(true);
     setError("");
     setResult(null);
 
     try {
-      const res = await fetch("/api/analyze", {
+      const response = await fetch("/api/analyze", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({ url: url.trim() }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Analysis failed.");
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data?.error || "Unable to analyze this URL.");
+      }
+
       setResult(data);
-    } catch (e: any) {
-      setError(e.message || "Something went wrong.");
+    } catch (err: any) {
+      setError(err?.message || "Something went wrong.");
     } finally {
       setLoading(false);
     }
   }
 
-  const num = (v: any) =>
-    new Intl.NumberFormat("en-IN", {
-      notation: "compact",
-      maximumFractionDigits: 1,
-    }).format(Number(v || 0));
-
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
-      <header className="sticky top-0 z-50 border-b border-slate-800 bg-slate-950/95">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-5 py-4">
-          <a href="#home" className="text-xl font-bold">
-            <span className="text-red-500">YT</span> Analyzer
-          </a>
-          <nav className="hidden gap-6 text-sm md:flex">
-            <a href="#home">Home</a><a href="#features">Features</a>
-            <a href="#how">How It Works</a><a href="#faq">FAQ</a>
-          </nav>
-          <button onClick={() => setMenu(!menu)}
-            className="rounded-lg border border-slate-700 px-3 py-2 md:hidden">☰</button>
-        </div>
-        {menu && (
-          <nav className="border-t border-slate-800 px-5 py-4 md:hidden">
-            <div className="flex flex-col gap-4 text-sm">
-              <a href="#home">Home</a><a href="#features">Features</a>
-              <a href="#how">How It Works</a><a href="#faq">FAQ</a>
-            </div>
-          </nav>
-        )}
-      </header>
-
-      <section id="home" className="px-5 py-20">
-        <div className="mx-auto max-w-5xl text-center">
-          <p className="mb-4 text-sm text-red-400">YouTube Channel & Video Analyzer</p>
-          <h1 className="text-4xl font-extrabold sm:text-6xl">
-            Analyze YouTube <span className="text-red-500">Like a Pro</span>
-          </h1>
-          <p className="mx-auto mt-5 max-w-2xl text-slate-400">
-            Analyze channels and videos with statistics and available monetization signals.
-          </p>
-
-          <div className="mx-auto mt-10 max-w-3xl rounded-2xl border border-slate-800 bg-slate-900 p-4">
-            <div className="flex flex-col gap-3 sm:flex-row">
-              <input
-                value={url}
-                onChange={e => setUrl(e.target.value)}
-                onKeyDown={e => e.key === "Enter" && analyze()}
-                placeholder="Paste YouTube channel or video URL..."
-                className="flex-1 rounded-xl border border-slate-700 bg-slate-950 px-4 py-4 outline-none focus:border-red-500"
-              />
-              <button onClick={analyze} disabled={loading}
-                className="rounded-xl bg-red-600 px-7 py-4 font-bold hover:bg-red-500 disabled:opacity-60">
-                {loading ? "Analyzing..." : "Analyze"}
-              </button>
-            </div>
-            {error && <p className="mt-4 rounded-xl bg-red-500/10 p-4 text-left text-sm text-red-300">{error}</p>}
+    <main className="min-h-screen bg-[#030718] text-white">
+      {/* NAVBAR */}
+      <nav className="border-b border-white/10 bg-[#030718]/95">
+        <div className="mx-auto flex max-w-7xl items-center justify-between px-5 py-5">
+          <div className="text-2xl font-bold">
+            <span className="text-red-500">YT</span>{" "}
+            <span>Analyzer</span>
           </div>
+
+          <div className="hidden gap-8 text-sm text-gray-300 md:flex">
+            <a href="#analyzer" className="hover:text-white">
+              Analyzer
+            </a>
+            <a href="#features" className="hover:text-white">
+              Features
+            </a>
+            <a href="#how" className="hover:text-white">
+              How It Works
+            </a>
+            <a href="#faq" className="hover:text-white">
+              FAQ
+            </a>
+          </div>
+
+          <button className="rounded-xl border border-white/20 px-4 py-2 text-xl md:hidden">
+            ☰
+          </button>
+        </div>
+      </nav>
+
+      {/* HERO */}
+      <section className="px-5 pb-16 pt-16 text-center md:pt-24">
+        <div className="mx-auto max-w-4xl">
+          <div className="mb-5 inline-block rounded-full border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm text-red-300">
+            YouTube Channel & Video Analyzer
+          </div>
+
+          <h1 className="text-4xl font-extrabold leading-tight md:text-6xl">
+            Analyze Any{" "}
+            <span className="text-red-500">YouTube</span> Channel
+          </h1>
+
+          <p className="mx-auto mt-5 max-w-2xl text-base leading-7 text-gray-400 md:text-lg">
+            Get public channel statistics, latest uploads and publicly
+            detectable ad-related signals in seconds.
+          </p>
         </div>
       </section>
 
+      {/* ANALYZER */}
+      <section id="analyzer" className="px-5 pb-20">
+        <div className="mx-auto max-w-4xl">
+          <form
+            onSubmit={analyze}
+            className="rounded-3xl border border-white/10 bg-[#0c1428] p-5 shadow-2xl md:p-7"
+          >
+            <label className="mb-3 block text-left text-sm font-medium text-gray-300">
+              YouTube Video or Channel URL
+            </label>
+
+            <div className="flex flex-col gap-3 md:flex-row">
+              <input
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                placeholder="https://youtube.com/@channel"
+                className="min-w-0 flex-1 rounded-xl border border-white/10 bg-[#050a19] px-5 py-4 text-white outline-none placeholder:text-gray-600 focus:border-red-500"
+              />
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="rounded-xl bg-red-600 px-7 py-4 font-bold transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {loading ? "Analyzing..." : "Analyze"}
+              </button>
+            </div>
+
+            {error && (
+              <div className="mt-4 rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300">
+                {error}
+              </div>
+            )}
+          </form>
+        </div>
+      </section>
+
+      {/* RESULTS */}
       {result && (
         <section className="px-5 pb-20">
           <div className="mx-auto max-w-6xl">
-            {result.type === "channel"
-              ? <Channel data={result.data} num={num} />
-              : <Video data={result.data} num={num} />}
+            {/* VIDEO RESULT */}
+            {result.type === "video" && result.data.video && (
+              <VideoResult video={result.data.video} />
+            )}
+
+            {/* CHANNEL RESULT */}
+            {result.type === "channel" && result.data.channel && (
+              <ChannelResult
+                channel={result.data.channel}
+                latestVideos={result.data.latestVideos || []}
+                evidence={result.data.publicAdEvidence}
+              />
+            )}
           </div>
         </section>
       )}
 
-      <section id="features" className="border-t border-slate-900 px-5 py-20">
+      {/* FEATURES */}
+      <section id="features" className="px-5 py-20">
         <div className="mx-auto max-w-6xl">
-          <h2 className="text-center text-3xl font-bold">Features</h2>
-          <div className="mt-10 grid gap-5 md:grid-cols-3">
-            <Card icon="📊" title="Channel Analytics">Subscribers, views and video count.</Card>
-            <Card icon="💰" title="Monetization">Advertising signals and estimated status.</Card>
-            <Card icon="🎬" title="Latest Videos">Recent uploads and ad signals.</Card>
-            <Card icon="👁️" title="Video Statistics">Views, likes and comments.</Card>
-            <Card icon="⚡" title="Fast Analysis">Quick YouTube URL analysis.</Card>
-            <Card icon="📱" title="Mobile Friendly">Works on phones and computers.</Card>
+          <div className="mb-12 text-center">
+            <h2 className="text-3xl font-bold md:text-4xl">
+              Powerful YouTube Analysis
+            </h2>
+            <p className="mt-3 text-gray-400">
+              Useful public information in one simple dashboard.
+            </p>
+          </div>
+
+          <div className="grid gap-5 md:grid-cols-3">
+            <Feature
+              icon="📊"
+              title="Channel Statistics"
+              text="View subscribers, total views and video count."
+            />
+
+            <Feature
+              icon="🎬"
+              title="Latest Uploads"
+              text="See the latest videos published by a channel."
+            />
+
+            <Feature
+              icon="📢"
+              title="Ad Signals"
+              text="Check publicly detectable ad-related signals on videos."
+            />
           </div>
         </div>
       </section>
 
-      <section id="how" className="bg-slate-900/40 px-5 py-20">
+      {/* HOW IT WORKS */}
+      <section id="how" className="border-y border-white/10 bg-[#070d20] px-5 py-20">
         <div className="mx-auto max-w-6xl">
-          <h2 className="text-center text-3xl font-bold">How It Works</h2>
-          <div className="mt-10 grid gap-5 md:grid-cols-3">
-            <Step n="1" title="Copy URL" text="Copy a YouTube URL." />
-            <Step n="2" title="Paste URL" text="Paste it into the analyzer." />
-            <Step n="3" title="Get Results" text="Click Analyze and see the results." />
+          <h2 className="mb-12 text-center text-3xl font-bold">
+            How It Works
+          </h2>
+
+          <div className="grid gap-6 md:grid-cols-3">
+            <Step
+              number="01"
+              title="Paste URL"
+              text="Enter a YouTube video or channel URL."
+            />
+            <Step
+              number="02"
+              title="Analyze"
+              text="YT Analyzer fetches publicly available YouTube data."
+            />
+            <Step
+              number="03"
+              title="View Results"
+              text="See channel statistics, videos and available ad signals."
+            />
           </div>
         </div>
       </section>
 
+      {/* FAQ */}
       <section id="faq" className="px-5 py-20">
         <div className="mx-auto max-w-4xl">
-          <h2 className="text-center text-3xl font-bold">FAQ</h2>
-          <div className="mt-8 space-y-4">
-            <Faq q="What can I analyze?" a="You can analyze YouTube channels and individual videos." />
-            <Faq q="What does monetization mean here?" a="The checker uses publicly detectable advertising signals. It is not private YouTube Studio data." />
-            <Faq q="Does Unknown mean Not Monetized?" a="No. Unknown means there was not enough public signal to determine the status." />
+          <h2 className="mb-10 text-center text-3xl font-bold">
+            Frequently Asked Questions
+          </h2>
+
+          <div className="space-y-4">
+            <Faq
+              q="What can YT Analyzer check?"
+              a="It can show public YouTube channel statistics, latest uploads and publicly detectable ad-related signals."
+            />
+
+            <Faq
+              q="Does this show official YouTube Partner Program status?"
+              a="No. Public YouTube data does not provide a reliable official YPP monetization-status field. Ad signals should therefore be treated only as signals, not as proof of YPP status."
+            />
+
+            <Faq
+              q="Is my YouTube account required?"
+              a="No. You only need a public YouTube video or channel URL."
+            />
+
+            <Faq
+              q="Why can an ad signal sometimes be unavailable?"
+              a="YouTube can change the information exposed on public pages, and ad delivery can vary by viewer, location, device and other factors."
+            />
           </div>
         </div>
       </section>
 
-      <footer className="border-t border-slate-800 px-5 py-8 text-center text-sm text-slate-500">
-        © {new Date().getFullYear()} YT Analyzer
+      {/* FOOTER */}
+      <footer className="border-t border-white/10 px-5 py-8 text-center text-sm text-gray-500">
+        © {new Date().getFullYear()} YT Analyzer. Built for public YouTube
+        analysis.
       </footer>
     </main>
   );
 }
 
-function Status({ status, reason }: any) {
-  const cls =
-    status === "Monetized"
-      ? "border-green-500/30 bg-green-500/10 text-green-300"
-      : status === "Not Monetized"
-      ? "border-red-500/30 bg-red-500/10 text-red-300"
-      : "border-yellow-500/30 bg-yellow-500/10 text-yellow-300";
+/* ---------------- COMPONENTS ---------------- */
 
-  return (
-    <div className={`rounded-xl border p-5 ${cls}`}>
-      <p className="text-2xl font-bold">
-        {status === "Monetized" ? "🟢 Monetized" :
-         status === "Not Monetized" ? "🔴 Not Monetized" : "🟡 Unknown"}
-      </p>
-      {reason && <p className="mt-2 text-sm opacity-80">{reason}</p>}
-    </div>
-  );
-}
-
-function Channel({ data, num }: any) {
-  const c = data?.channel || {};
-  const videos = data?.latestVideos || [];
+function VideoResult({ video }: { video: Video }) {
+  const detected = Boolean(video.adSignal?.detected);
 
   return (
     <div className="space-y-6">
-      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
-        <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
-          {c.thumbnail && <img src={c.thumbnail} className="h-24 w-24 rounded-full object-cover" alt="" />}
-          <div>
-            <p className="text-sm text-red-400">YouTube Channel</p>
-            <h2 className="text-3xl font-bold">{c.title || "Unknown"}</h2>
-            <p className="mt-2 line-clamp-3 text-sm text-slate-400">{c.description || ""}</p>
+      <div className="overflow-hidden rounded-3xl border border-white/10 bg-[#0d162b]">
+        <div className="grid md:grid-cols-2">
+          <img
+            src={video.thumbnail}
+            alt={video.title}
+            className="h-full min-h-[230px] w-full object-cover"
+          />
+
+          <div className="p-6 md:p-8">
+            <p className="mb-3 text-sm text-red-400">VIDEO ANALYSIS</p>
+
+            <h2 className="text-2xl font-bold">{video.title}</h2>
+
+            <p className="mt-3 text-sm text-gray-400">
+              {video.channelTitle}
+            </p>
+
+            <div className="mt-6 grid grid-cols-3 gap-3">
+              <Stat label="Views" value={formatNumber(video.views)} />
+              <Stat label="Likes" value={formatNumber(video.likes)} />
+              <Stat label="Comments" value={formatNumber(video.comments)} />
+            </div>
           </div>
         </div>
-        <div className="mt-6 grid gap-4 sm:grid-cols-3">
-          <Stat label="Subscribers" value={num(c.subscribers)} />
-          <Stat label="Total Views" value={num(c.views)} />
-          <Stat label="Videos" value={num(c.videoCount)} />
-        </div>
       </div>
 
-      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
-        <p className="mb-4 text-sm text-slate-400">Channel Monetization</p>
-        <Status status={c.monetization || "Unknown"} reason={c.monetizationReason} />
-      </div>
+      <div className="rounded-3xl border border-white/10 bg-[#0d162b] p-6">
+        <p className="mb-4 text-lg font-medium text-gray-400">
+          Public Ad Signal
+        </p>
 
-      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
-        <h2 className="text-2xl font-bold">Latest Uploads</h2>
-        <div className="mt-5 grid gap-5 md:grid-cols-2">
-          {videos.map((v: any) => (
-            <a key={v.id} href={`https://www.youtube.com/watch?v=${v.id}`}
-              target="_blank" rel="noreferrer"
-              className="overflow-hidden rounded-xl border border-slate-800 bg-slate-950">
-              {v.thumbnail && <img src={v.thumbnail} alt="" className="aspect-video w-full object-cover" />}
-              <div className="p-4">
-                <h3 className="line-clamp-2 font-semibold">{v.title}</h3>
-                <p className="mt-2 text-xs text-slate-500">
-                  {num(v.views)} views
-                  {v.adSignal ? " • 🟢 Ad Signal" : " • 🟡 No Ad Signal"}
-                </p>
-              </div>
-            </a>
-          ))}
+        <div
+          className={`rounded-2xl border p-6 ${
+            detected
+              ? "border-green-500/40 bg-green-500/10"
+              : "border-yellow-500/40 bg-yellow-500/10"
+          }`}
+        >
+          <div className="text-2xl font-bold">
+            {detected ? "🟢 Ad signal detected" : "🟡 No ad signal detected"}
+          </div>
+
+          <p className="mt-2 text-sm text-gray-400">
+            This is a publicly detectable signal only. It does not confirm
+            official YouTube Partner Program monetization status.
+          </p>
+
+          {video.adSignal?.adBreaks !== undefined && (
+            <p className="mt-4 text-sm text-gray-300">
+              Detected ad-break signals:{" "}
+              <strong>{video.adSignal.adBreaks}</strong>
+            </p>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-function Video({ data, num }: any) {
-  const v = data?.video || {};
+function ChannelResult({
+  channel,
+  latestVideos,
+  evidence,
+}: {
+  channel: Channel;
+  latestVideos: Video[];
+  evidence?: {
+    videosChecked: number;
+    videosWithAdSignals: number;
+    videosWithoutAdSignals: number;
+    signalDetected: boolean;
+  };
+}) {
+  const signalDetected = Boolean(evidence?.signalDetected);
 
   return (
     <div className="space-y-6">
-      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
-        <p className="text-sm text-red-400">YouTube Video</p>
-        <h2 className="mt-2 text-3xl font-bold">{v.title || "Unknown Video"}</h2>
+      {/* CHANNEL HEADER */}
+      <div className="overflow-hidden rounded-3xl border border-white/10 bg-[#0d162b] p-6 md:p-8">
+        <div className="flex flex-col items-center gap-5 text-center md:flex-row md:text-left">
+          <img
+            src={channel.thumbnail}
+            alt={channel.title}
+            className="h-28 w-28 rounded-full border-4 border-white/10 object-cover"
+          />
 
-        {v.thumbnail && <img src={v.thumbnail} alt="" className="mt-6 aspect-video w-full rounded-xl object-cover" />}
+          <div className="flex-1">
+            <p className="text-sm text-red-400">CHANNEL ANALYSIS</p>
 
-        <div className="mt-6 grid gap-4 sm:grid-cols-3">
-          <Stat label="Views" value={num(v.views)} />
-          <Stat label="Likes" value={num(v.likes)} />
-          <Stat label="Comments" value={num(v.comments)} />
+            <h2 className="mt-2 text-3xl font-bold">{channel.title}</h2>
+
+            <p className="mt-2 text-sm text-gray-400">
+              Created {formatDate(channel.publishedAt)}
+            </p>
+          </div>
         </div>
 
-        <div className="mt-6 rounded-xl border border-slate-800 bg-slate-950 p-5">
-          <p className="text-sm text-slate-400">Channel</p>
-          <p className="mt-1 font-bold">{v.channelTitle}</p>
+        <div className="mt-8 grid gap-4 md:grid-cols-3">
+          <Stat
+            label="Subscribers"
+            value={formatNumber(channel.subscribers)}
+          />
+
+          <Stat label="Total Views" value={formatNumber(channel.views)} />
+
+          <Stat label="Videos" value={formatNumber(channel.videoCount)} />
         </div>
       </div>
 
-      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
-        <p className="mb-4 text-sm text-slate-400">Video Monetization</p>
-        <Status status={v.monetization || "Unknown"} reason={v.monetizationReason} />
+      {/* CHANNEL AD SIGNAL */}
+      <div className="rounded-3xl border border-white/10 bg-[#0d162b] p-6 md:p-8">
+        <p className="text-lg text-gray-400">Channel Public Ad Signals</p>
+
+        <div
+          className={`mt-5 rounded-2xl border p-6 ${
+            signalDetected
+              ? "border-green-500/40 bg-green-500/10"
+              : "border-yellow-500/40 bg-yellow-500/10"
+          }`}
+        >
+          <div className="text-2xl font-bold">
+            {signalDetected
+              ? "🟢 Ad signals detected"
+              : "🟡 No ad signals detected"}
+          </div>
+
+          <p className="mt-2 text-sm text-gray-400">
+            This result is based on publicly detectable signals from the
+            checked videos. It is not an official YPP monetization-status
+            confirmation.
+          </p>
+
+          {evidence && (
+            <div className="mt-5 grid grid-cols-3 gap-3">
+              <MiniStat
+                label="Checked"
+                value={String(evidence.videosChecked)}
+              />
+
+              <MiniStat
+                label="Signals"
+                value={String(evidence.videosWithAdSignals)}
+              />
+
+              <MiniStat
+                label="No Signal"
+                value={String(evidence.videosWithoutAdSignals)}
+              />
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* LATEST VIDEOS */}
+      <div className="rounded-3xl border border-white/10 bg-[#0d162b] p-6 md:p-8">
+        <h2 className="mb-7 text-3xl font-bold">Latest Uploads</h2>
+
+        <div className="grid gap-6 md:grid-cols-2">
+          {latestVideos.map((video) => (
+            <div
+              key={video.id}
+              className="overflow-hidden rounded-2xl border border-white/10 bg-[#070d20]"
+            >
+              <img
+                src={video.thumbnail}
+                alt={video.title}
+                className="aspect-video w-full object-cover"
+              />
+
+              <div className="p-5">
+                <h3 className="line-clamp-2 text-lg font-bold">
+                  {video.title}
+                </h3>
+
+                <p className="mt-3 text-sm text-gray-400">
+                  {formatNumber(video.views)} views
+                  {video.publishedAt
+                    ? ` • ${formatDate(video.publishedAt)}`
+                    : ""}
+                </p>
+
+                <div
+                  className={`mt-4 rounded-xl px-4 py-3 text-sm font-semibold ${
+                    video.adSignal?.detected
+                      ? "bg-green-500/10 text-green-300"
+                      : "bg-yellow-500/10 text-yellow-300"
+                  }`}
+                >
+                  {video.adSignal?.detected
+                    ? "🟢 Ad signal detected"
+                    : "🟡 No ad signal detected"}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {latestVideos.length === 0 && (
+          <p className="text-gray-400">No recent videos found.</p>
+        )}
       </div>
     </div>
   );
 }
 
-function Stat({ label, value }: any) {
+function Feature({
+  icon,
+  title,
+  text,
+}: {
+  icon: string;
+  title: string;
+  text: string;
+}) {
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-950 p-5">
-      <p className="text-sm text-slate-500">{label}</p>
-      <p className="mt-2 text-2xl font-bold">{value}</p>
+    <div className="rounded-2xl border border-white/10 bg-[#0c1428] p-7">
+      <div className="text-4xl">{icon}</div>
+      <h3 className="mt-5 text-xl font-bold">{title}</h3>
+      <p className="mt-3 leading-7 text-gray-400">{text}</p>
     </div>
   );
 }
 
-function Card({ icon, title, children }: any) {
+function Step({
+  number,
+  title,
+  text,
+}: {
+  number: string;
+  title: string;
+  text: string;
+}) {
   return (
-    <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
-      <div className="text-3xl">{icon}</div>
-      <h3 className="mt-4 text-xl font-bold">{title}</h3>
-      <p className="mt-2 text-sm leading-6 text-slate-400">{children}</p>
+    <div className="rounded-2xl border border-white/10 bg-[#0c1428] p-7">
+      <div className="text-4xl font-black text-red-500">{number}</div>
+      <h3 className="mt-5 text-xl font-bold">{title}</h3>
+      <p className="mt-3 leading-7 text-gray-400">{text}</p>
     </div>
   );
 }
 
-function Step({ n, title, text }: any) {
+function Faq({ q, a }: { q: string; a: string }) {
   return (
-    <div className="rounded-2xl border border-slate-800 bg-slate-950 p-6">
-      <div className="flex h-11 w-11 items-center justify-center rounded-full bg-red-600 font-bold">{n}</div>
-      <h3 className="mt-4 text-xl font-bold">{title}</h3>
-      <p className="mt-2 text-sm text-slate-400">{text}</p>
-    </div>
-  );
-}
-
-function Faq({ q, a }: any) {
-  return (
-    <details className="rounded-xl border border-slate-800 bg-slate-900 p-5">
+    <details className="rounded-2xl border border-white/10 bg-[#0c1428] p-5">
       <summary className="cursor-pointer font-semibold">{q}</summary>
-      <p className="mt-3 text-sm leading-6 text-slate-400">{a}</p>
+      <p className="mt-4 leading-7 text-gray-400">{a}</p>
     </details>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-[#050a19] p-5">
+      <p className="text-sm text-gray-500">{label}</p>
+      <p className="mt-2 text-3xl font-bold">{value}</p>
+    </div>
+  );
+}
+
+function MiniStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl bg-black/20 p-3 text-center">
+      <p className="text-xs text-gray-500">{label}</p>
+      <p className="mt-1 text-lg font-bold">{value}</p>
+    </div>
   );
       }
